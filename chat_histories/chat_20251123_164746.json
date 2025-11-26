@@ -1,0 +1,17 @@
+{
+  "id": "20251123_164746",
+  "title": "[11-23] 你是谁",
+  "updated_at": "2025-11-23T16:47:48.423705",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你是谁"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "reasoning": "",
+      "sources": []
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="DeepSeek RAG Pro Desktop App" />
+    <title>DeepSeek RAG Pro</title>
+    
+    <!-- 如果你是用 npm 也就是 package.json 安装的 tailwindcss，下面这行 CDN 可以删掉 -->
+    <!-- 如果你没配置本地构建，必须保留这个，并加上配置脚本 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class', // 这里开启手动切换模式
+        theme: {
+          extend: {
+            animation: {
+              fadeIn: 'fadeIn 0.3s ease-in-out',
+              slideDown: 'slideDown 0.3s ease-in-out',
+            },
+            keyframes: {
+              fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+              slideDown: { '0%': { transform: 'translateY(-10px)', opacity: '0' }, '100%': { transform: 'translateY(0)', opacity: '1' } }
+            }
+          }
+        }
+      }
+    </script>
+
+    <style>
+      /* 防止切换时闪烁 */
+      html.dark { color-scheme: dark; }
+      body { transition: background-color 0.3s, color 0.3s; }
+    </style>
+  </head>
+  <body class="bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200">
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

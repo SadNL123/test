@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+langchain-community
+langchain-text-splitters
+faiss-cpu
+gitpython
+openai
+huggingface-hub
+langchain-huggingface
+sentence-transformers
+pymupdf
