@@ -10,6 +10,7 @@ import stat
 import uuid
 import re
 import subprocess
+import traceback
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 
@@ -30,7 +31,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 os.environ["USER_AGENT"] = "DeepSeekRAG/1.0"
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
-# --- [关键修复] 路径定位逻辑 ---
+# --- [路径定位逻辑] ---
 # 1. 获取当前脚本(server.py)所在的绝对路径目录 (即 backend 文件夹)
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 # 2. 获取项目根目录 (backend 的父级目录)
@@ -49,6 +50,8 @@ else:
 
 app = FastAPI()
 
+# === [CORS 配置增强] ===
+# 允许所有来源，特别是 localhost 和 127.0.0.1
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -112,6 +115,15 @@ class FileCreateRequest(BaseModel):
 class TerminalRequest(BaseModel):
     command: str
     cwd: Optional[str] = None
+
+class CodeEditRequest(BaseModel):
+    file_path: str
+    selected_text: str
+    full_content: str
+    instruction: str
+    api_key: str
+    base_url: str
+    model: str
 
 # === Helper Functions ===
 def get_embedding_model(model_name):
@@ -736,7 +748,7 @@ async def chat_endpoint(req: ChatRequest):
             "重要指令：如果用户要求修改代码，请务必输出一段完整的、可直接替换的代码块。不要只输出差异，方便用户直接复制应用。"
         )
 
-    # RAG 检索逻辑
+    # RAG 检索逻辑 (注意：这里是阻塞的，可能会导致流式输出前的延迟)
     header_context = ""
     if state.full_text_cache:
         header_context = f"\n\n【文档开头预览 (Title/Abstract)】:\n{state.full_text_cache[:600]}\n...\n"
@@ -778,6 +790,7 @@ async def chat_endpoint(req: ChatRequest):
     async def generate():
         """流式生成器函数"""
         try:
+            print(f"Requesting LLM: Model={req.model}, BaseURL={req.base_url}")
             # 调用 LLM API
             stream = await client.chat.completions.create(
                 model=req.model,
@@ -785,6 +798,8 @@ async def chat_endpoint(req: ChatRequest):
                 temperature=req.temperature,
                 stream=True
             )
+            print("Stream started successfully.")
+            
             # 先发送 RAG 来源信息
             if sources: yield json.dumps({"t": "sources", "d": sources}) + "\n"
             
@@ -802,20 +817,21 @@ async def chat_endpoint(req: ChatRequest):
                     
         except Exception as e:
             # 捕获异常并以 JSON 格式返回错误信息
-            yield json.dumps({"t": "error", "d": str(e)}) + "\n"
+            err_msg = str(e)
+            print(f"LLM API Error: {err_msg}")
+            traceback.print_exc() 
+            yield json.dumps({"t": "error", "d": f"后端 API 调用失败: {err_msg}"}) + "\n"
 
-    return StreamingResponse(generate(), media_type="text/plain")
-
-# === 在 backend/server.py 中添加 ===
-
-class CodeEditRequest(BaseModel):
-    file_path: str
-    selected_text: str
-    full_content: str
-    instruction: str
-    api_key: str
-    base_url: str
-    model: str
+    # === [关键修复] 添加 Headers 禁止缓存，确保流式输出不被缓冲 ===
+    return StreamingResponse(
+        generate(), 
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no" # 针对 Nginx 等代理的特殊头
+        }
+    )
 
 @app.post("/api/code/edit")
 async def code_edit_endpoint(req: CodeEditRequest):
@@ -862,5 +878,6 @@ async def code_edit_endpoint(req: CodeEditRequest):
     
 if __name__ == "__main__":
     import uvicorn
-    # 强制在 127.0.0.1 运行，避免外部访问问题
+    # === [关键修改] 显式绑定 127.0.0.1 避免 0.0.0.0 被防火墙拦截或 localhost 解析错误 ===
+    print("启动后端服务: [http://127.0.0.1:8000](http://127.0.0.1:8000)")
     uvicorn.run(app, host="127.0.0.1", port=8000)
