@@ -77,6 +77,13 @@ const EnhancedEditor = ({
     const handleInlineEditSend = async (instruction) => {
         setIsProcessingEdit(true);
         const editor = editorRef.current;
+        
+        // 防御性检查：如果在处理过程中 editor 实例丢失
+        if (!editor) {
+             setIsProcessingEdit(false);
+             return;
+        }
+
         const model = editor.getModel();
         const selection = editor.getSelection();
         const selectedText = model.getValueInRange(selection);
@@ -118,6 +125,9 @@ const EnhancedEditor = ({
             }
 
             setModifiedCode(newFullContent);
+            
+            // 关键：在状态切换前清理引用
+            editorRef.current = null;
             setDiffMode(true);
             setShowInlineEdit(false);
 
@@ -130,12 +140,26 @@ const EnhancedEditor = ({
     };
 
     const acceptDiff = () => {
-        setEditorContent(modifiedCode); // 更新主编辑器内容
-        setDiffMode(false);
+        const contentToSave = modifiedCode;
+        
+        // 先更新内容
+        if (contentToSave !== undefined && contentToSave !== null) {
+            setEditorContent(contentToSave);
+        }
+        
+        // 使用 setTimeout 将模式切换推迟到下一个事件循环
+        // 这有助于让 React 先处理完数据更新，再处理组件卸载/挂载，减少 ResizeObserver 冲突
+        setTimeout(() => {
+            setDiffMode(false);
+            setOriginalCode("");
+            setModifiedCode("");
+        }, 0);
     };
 
     const rejectDiff = () => {
         setDiffMode(false);
+        setOriginalCode("");
+        setModifiedCode("");
     };
 
     if (!activeFile) return (
@@ -145,7 +169,9 @@ const EnhancedEditor = ({
         </div>
     );
       
-    const lines = (diffMode ? modifiedCode : editorContent).split('\n');
+    // 注意：lines 的计算需要处理 diffMode 下的状态，防止闪烁
+    const currentCode = diffMode ? modifiedCode : editorContent;
+    const lines = (currentCode || "").split('\n');
     const isMarkdown = activeFile.path.toLowerCase().endsWith('.md');
 
     return (
@@ -173,7 +199,7 @@ const EnhancedEditor = ({
                 />
             </div>
 
-            {/* 搜索结果显示区域 (保持不变) */}
+            {/* 搜索结果显示区域 */}
             {globalSearchResults.length > 0 && (
                 <div className="flex-shrink-0 border-b border-slate-200 dark:border-slate-700 bg-yellow-50/50 dark:bg-slate-800/50 flex flex-col transition-all duration-300 ease-in-out" style={{ maxHeight: '45vh', minHeight: '150px' }}>
                     <div className="flex justify-between items-center px-4 py-2 bg-yellow-100/80 dark:bg-slate-800/80 backdrop-blur-sm border-b border-yellow-200 dark:border-slate-700 sticky top-0 z-10 shadow-sm">
@@ -245,7 +271,9 @@ const EnhancedEditor = ({
                     </div>
                 ) : diffMode ? (
                     // Cursor 风格：显示 Diff 视图
+                    // key属性强制 DiffEditor 在内容变化时彻底重置，避免 ResizeObserver 错误
                     <DiffEditor
+                        key={`diff-editor-${activeFile.path}`}
                         height="100%"
                         language={getFileLanguage(activeFile.path)}
                         original={originalCode}
@@ -256,11 +284,14 @@ const EnhancedEditor = ({
                             minimap: { enabled: false },
                             fontSize: 14,
                             scrollBeyondLastLine: false,
+                            originalEditable: false, // 显式设置为不可编辑
                         }}
                     />
                 ) : (
                     // 标准编辑器
+                    // key属性确保切换回标准编辑器时是一个全新的实例，避免引用混淆
                     <Editor
+                        key={`standard-editor-${activeFile.path}`}
                         height="100%"
                         language={getFileLanguage(activeFile.path)}
                         value={editorContent}
@@ -280,7 +311,7 @@ const EnhancedEditor = ({
                 )}
             </div>
             
-            {/* 底部工具栏 (保持不变) */}
+            {/* 底部工具栏 */}
             <div className="h-10 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 bg-white dark:bg-slate-900">
                 <div className="flex items-center space-x-4">
                     <span className="text-xs text-slate-400">{lines.length} lines • UTF-8</span>
@@ -302,7 +333,7 @@ const EnhancedEditor = ({
                 </div>
             </div>
             
-            {/* 终端面板 (保持不变) */}
+            {/* 终端面板 */}
             {terminalOpen && (
                 <div className="h-48 border-t border-slate-200 dark:border-slate-800 bg-slate-900 text-slate-200 p-2 font-mono text-xs flex flex-col animate-slideUp">
                     <div className="flex-1 overflow-y-auto mb-2 space-y-1">
