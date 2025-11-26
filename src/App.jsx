@@ -25,6 +25,8 @@ import {
   ClipboardDocumentIcon,
   ArrowDownTrayIcon as DownloadIcon,
   ChatBubbleLeftRightIcon,
+  EyeIcon,       
+  EyeSlashIcon   
 } from '@heroicons/react/24/outline';
 
 // === 提取的常量与工具 ===
@@ -45,7 +47,6 @@ import ReactMarkdown from 'react-markdown';
 
 const App = () => {
   // === 状态管理 ===
-  //const [tokenUsage, setTokenUsage] = useState({ used: 0, limit: 32000 });
   
   // === 新增：控制 IDE 侧边栏显示 ===
   const [showIdeChat, setShowIdeChat] = useState(true);
@@ -73,6 +74,7 @@ const App = () => {
   
   const [provider, setProvider] = useState(() => localStorage.getItem("ai_provider") || "deepseek");
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(`api_key_${localStorage.getItem("ai_provider") || "deepseek"}`) || "");
+  const [showApiKey, setShowApiKey] = useState(false); // 新增：控制 API Key 可见性
   const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem("ai_base_url") || PROVIDERS["deepseek"].baseUrl);
   const [model, setModel] = useState(() => localStorage.getItem("ai_model") || "deepseek-chat");
   const [temperature, setTemperature] = useState(1.0);
@@ -153,7 +155,8 @@ const App = () => {
               messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
           } else if (scrollTarget === 'last-user') {
               setTimeout(() => {
-                  lastUserMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  // 修改：block: "start" 让元素滚动到可视区域顶部
+                  lastUserMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
               }, 100);
           }
       }
@@ -497,14 +500,23 @@ const App = () => {
   };
 
   const handleChatSend = async () => {
-    if (!input.trim() || !apiKey) return;
+    // 1. 基础校验：输入为空或正在加载则返回
+    if (!input.trim()) return;
     if (isLoading) return;
+
+    // 2. 立即更新 UI：显示用户消息 + AI 占位符（为了显示加载动画）
     setScrollTarget('bottom');
     const userMsg = { role: "user", content: input };
+    // 先添加用户消息
     const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
+    
+    // 再添加一个空的 assistant 消息作为占位符，确保 UI 立即显示“正在思考”动画
+    setMessages([...newMessages, { role: "assistant", content: "", reasoning: "", sources: [] }]);
+    
     setInput("");
     setIsLoading(true);
+
+    // 重置流式缓冲区
     msgBufferRef.current = "";
     reasoningBufferRef.current = "";
     isStreamingRef.current = true;
@@ -513,7 +525,36 @@ const App = () => {
     const controller = new AbortController(); 
     abortControllerRef.current = controller;
 
+    // 3. 延迟校验 API Key（"先上车后补票"策略）
+    if (!apiKey) {
+        // 延迟 600ms，让用户看到一下加载动画，确认系统已响应
+        setTimeout(() => {
+            setMessages(prev => {
+                const arr = [...prev];
+                const lastIdx = arr.length - 1;
+                // 直接修改最后的占位符消息为错误提示
+                if (lastIdx >= 0 && arr[lastIdx].role === 'assistant') {
+                    arr[lastIdx] = {
+                        ...arr[lastIdx],
+                        content: "🚫 **未配置 API Key**\n\n检测到您的 API Key 为空。请点击左下角的设置区域，输入您的 Key 即可开始对话。",
+                        reasoning: "" 
+                    };
+                }
+                return arr;
+            });
+            setIsLoading(false);
+            isStreamingRef.current = false;
+            setStatusMsg({ type: "error", text: "请设置 API Key" });
+        }, 600);
+        return;
+    }
+
+    // 4. 启动打字机动画定时器
     if (typingTimerRef.current) clearInterval(typingTimerRef.current);
+    
+    // 标记是否接收到内容
+    let hasReceivedContent = false;
+
     typingTimerRef.current = setInterval(() => {
         const hasContent = msgBufferRef.current.length > 0;
         const hasReasoning = reasoningBufferRef.current.length > 0;
@@ -522,14 +563,15 @@ const App = () => {
              msgBufferRef.current = msgBufferRef.current.slice(5);
              const rChunk = reasoningBufferRef.current.slice(0, 5);
              reasoningBufferRef.current = reasoningBufferRef.current.slice(5);
+             
+             if (cChunk || rChunk) hasReceivedContent = true;
+
              setMessages(prev => {
                 const last = prev[prev.length - 1];
                 if (last && last.role === "assistant") {
                     return [...prev.slice(0, -1), { ...last, content: last.content + cChunk, reasoning: (last.reasoning || "") + rChunk }];
                 }
-                if (prev.length > 0 && prev[prev.length - 1].role === "user") {
-                     return [...prev, { role: "assistant", content: cChunk, reasoning: rChunk, sources: [] }];
-                }
+                // 理论上不会走到这里，因为我们已经预置了 assistant 消息
                 return prev;
             });
         } else if (!isStreamingRef.current) {
@@ -537,9 +579,11 @@ const App = () => {
         }
     }, 20);
 
+    // 5. 保存历史记录 (仅保存用户消息部分，AI 回复稍后更新)
     let currentSessionId = sessionId;
     if (!currentSessionId) {
         try { 
+            // 初始保存只包含用户消息，避免保存空的 assistant 消息导致历史记录显示异常
             const res = await axios.post(`${API_URL}/api/save_history`, { session_id: null, messages: newMessages }); 
             currentSessionId = res.data.session_id; 
             setSessionId(currentSessionId); 
@@ -556,8 +600,7 @@ const App = () => {
         pinned_files: pinnedFiles
     } : null;
 
-    setMessages(prev => [...prev, { role: "assistant", content: "", reasoning: "", sources: [] }]);
-    
+    // 6. 发起网络请求
     try {
       const response = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
@@ -578,6 +621,8 @@ const App = () => {
       if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
+      if (!response.body) throw new Error("Response body is null");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -589,8 +634,14 @@ const App = () => {
             if (!line.trim()) continue;
             try {
                 const data = JSON.parse(line);
-                if (data.t === "content") msgBufferRef.current += data.d;
-                else if (data.t === "reasoning") reasoningBufferRef.current += data.d;
+                if (data.t === "content") {
+                    msgBufferRef.current += data.d;
+                    hasReceivedContent = true;
+                }
+                else if (data.t === "reasoning") {
+                    reasoningBufferRef.current += data.d;
+                    hasReceivedContent = true;
+                }
                 else if (data.t === "sources") {
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
@@ -598,6 +649,7 @@ const App = () => {
                     });
                 } else if (data.t === "error") {
                     msgBufferRef.current += `\n\n**[API 错误]**：${data.d}`;
+                    hasReceivedContent = true;
                     isStreamingRef.current = false;
                     clearInterval(typingTimerRef.current);
                 }
@@ -607,7 +659,20 @@ const App = () => {
       isStreamingRef.current = false;
       clearInterval(typingTimerRef.current); 
       
+      // 7. 请求结束后的处理 (保存完整对话)
       setMessages(prev => {
+          const last = prev[prev.length - 1];
+          
+          // 如果完全没有收到内容，说明连接成功但无响应
+          if (!last.content && !last.reasoning && !msgBufferRef.current && !reasoningBufferRef.current) {
+              const errorMsg = "**[错误]**：服务器响应为空。请检查：\n1. API Key 是否正确\n2. 网络连接是否正常\n3. 模型名称是否有效";
+              const updatedMsg = { ...last, content: errorMsg };
+              const finalMessages = [...prev.slice(0, -1), updatedMsg];
+              axios.post(`${API_URL}/api/save_history`, { session_id: currentSessionId, messages: finalMessages }).catch(console.error);
+              return finalMessages;
+          }
+
+          // 正常结束，保存
           const finalMessages = [...newMessages, { role: "assistant", content: prev[prev.length - 1].content, reasoning: prev[prev.length - 1].reasoning, sources: prev[prev.length - 1].sources }];
           axios.post(`${API_URL}/api/save_history`, { session_id: currentSessionId, messages: finalMessages }).catch(console.error);
           return finalMessages;
@@ -616,13 +681,14 @@ const App = () => {
     } catch (e) { 
         isStreamingRef.current = false; 
         clearInterval(typingTimerRef.current);
-        const errorContent = `**[请求被中断或发生错误]**：${e.message}`;
+        // 错误处理：直接在当前气泡中显示错误
         setMessages(prev => {
             const last = prev[prev.length - 1];
-            if (last && last.role === "assistant") {
-                return [...prev.slice(0, -1), { ...last, content: last.content + errorContent }];
-            }
-            return [...prev, { role: "assistant", content: errorContent, reasoning: "", sources: [] }];
+            const errorContent = `**[请求中断]**：${e.message}`;
+            // 如果是 AbortError (用户停止生成)，则不视为错误
+            if (e.name === 'AbortError') return prev;
+
+            return [...prev.slice(0, -1), { ...last, content: last.content + (last.content ? "\n\n" : "") + errorContent }];
         });
     } finally { 
         setIsLoading(false); 
@@ -901,7 +967,22 @@ const App = () => {
              </div>
              <div>
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">API Key</label>
-                <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full px-2 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-xs outline-none focus:border-indigo-500 transition text-slate-600 dark:text-slate-300" placeholder="Enter API Key..." />
+                <div className="relative">
+                    <input 
+                        type={showApiKey ? "text" : "password"} 
+                        value={apiKey} 
+                        onChange={e => setApiKey(e.target.value)} 
+                        className="w-full px-2 py-1.5 pr-8 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-xs outline-none focus:border-indigo-500 transition text-slate-600 dark:text-slate-300" 
+                        placeholder="Enter API Key..." 
+                    />
+                    <button 
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition"
+                        title={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+                    >
+                        {showApiKey ? <EyeSlashIcon className="w-3.5 h-3.5"/> : <EyeIcon className="w-3.5 h-3.5"/>}
+                    </button>
+                </div>
                 {envKeys[provider] && <p className="text-[10px] text-green-600 mt-1">✅ 已自动加载环境变量</p>}
              </div>
              <div>
