@@ -801,7 +801,8 @@ async def chat_endpoint(req: ChatRequest):
             print("Stream started successfully.")
             
             # 先发送 RAG 来源信息
-            if sources: yield json.dumps({"t": "sources", "d": sources}) + "\n"
+            # [Fix] ensure_ascii=False 允许直接发送中文，避免前端需要额外解码
+            if sources: yield json.dumps({"t": "sources", "d": sources}, ensure_ascii=False) + "\n"
             
             # 流式处理响应
             async for chunk in stream:
@@ -809,23 +810,24 @@ async def chat_endpoint(req: ChatRequest):
                 
                 # DeepSeek 等模型可能会返回推理内容 (reasoning_content)
                 if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                    yield json.dumps({"t": "reasoning", "d": delta.reasoning_content}) + "\n"
+                    yield json.dumps({"t": "reasoning", "d": delta.reasoning_content}, ensure_ascii=False) + "\n"
                 
                 # 核心文本内容
                 if hasattr(delta, 'content') and delta.content:
-                    yield json.dumps({"t": "content", "d": delta.content}) + "\n"
+                    yield json.dumps({"t": "content", "d": delta.content}, ensure_ascii=False) + "\n"
                     
         except Exception as e:
             # 捕获异常并以 JSON 格式返回错误信息
             err_msg = str(e)
             print(f"LLM API Error: {err_msg}")
             traceback.print_exc() 
-            yield json.dumps({"t": "error", "d": f"后端 API 调用失败: {err_msg}"}) + "\n"
+            yield json.dumps({"t": "error", "d": f"后端 API 调用失败: {err_msg}"}, ensure_ascii=False) + "\n"
 
-    # === [关键修复] 添加 Headers 禁止缓存，确保流式输出不被缓冲 ===
+    # === [关键修复] 修改 media_type 为 "text/event-stream" 以更好地支持 SSE ===
+    # 添加 Headers 禁止缓存，确保流式输出不被缓冲
     return StreamingResponse(
         generate(), 
-        media_type="text/plain",
+        media_type="text/event-stream", 
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
