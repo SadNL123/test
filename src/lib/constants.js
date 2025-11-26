@@ -14,7 +14,8 @@ import {
   VideoCameraIcon 
 } from '@heroicons/react/24/outline';
 
-export const API_URL = "http://localhost:8000";
+// === [修改] 强制使用 IPv4 地址，避免 localhost 解析问题 ===
+export const API_URL = "http://127.0.0.1:8000";
 
 // === 完整服务商配置 ===
 export const PROVIDERS = {
