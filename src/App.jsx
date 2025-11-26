@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import ReactMarkdown from 'react-markdown'; 
 
 // === 图标导入 ===
 import { 
@@ -26,7 +27,9 @@ import {
   ArrowDownTrayIcon as DownloadIcon,
   ChatBubbleLeftRightIcon,
   EyeIcon,       
-  EyeSlashIcon   
+  EyeSlashIcon,
+  SignalIcon,
+  ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
 
 // === 提取的常量与工具 ===
@@ -42,39 +45,39 @@ import CommandPalette from './components/CommandPalette';
 import ImportModal from './components/ImportModal';
 import SourceViewer from './components/SourceViewer';
 
-// 如果需要使用 ReactMarkdown 渲染工具输出，保留引用
-import ReactMarkdown from 'react-markdown';
-
 const App = () => {
   // === 状态管理 ===
   
-  // === 新增：控制 IDE 侧边栏显示 ===
+  // 界面显示状态
   const [showIdeChat, setShowIdeChat] = useState(true);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
   const [currentView, setCurrentView] = useState('chat'); 
   const [activeTool, setActiveTool] = useState(null); 
   
+  // 聊天核心状态
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
+  
+  // 工具运行状态
   const [toolInput, setToolInput] = useState(""); 
   const [toolOutput, setToolOutput] = useState(""); 
   const [toolFile, setToolFile] = useState(null);
-
-  // 翻译工具状态
   const [transLang, setTransLang] = useState("中文 (Chinese)");
   const [transStyle, setTransStyle] = useState("标准 (Standard)");
 
+  // 系统状态
   const [isLoading, setIsLoading] = useState(false);
-  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false); // 新增：刷新状态
+  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false); 
   const [isImporting, setIsImporting] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [viewSource, setViewSource] = useState(null);
   const [sources, setSources] = useState([]);
   const [envKeys, setEnvKeys] = useState({});
   
+  // 设置与配置
   const [provider, setProvider] = useState(() => localStorage.getItem("ai_provider") || "deepseek");
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(`api_key_${localStorage.getItem("ai_provider") || "deepseek"}`) || "");
-  const [showApiKey, setShowApiKey] = useState(false); // 新增：控制 API Key 可见性
+  const [showApiKey, setShowApiKey] = useState(false); 
   const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem("ai_base_url") || PROVIDERS["deepseek"].baseUrl);
   const [model, setModel] = useState(() => localStorage.getItem("ai_model") || "deepseek-chat");
   const [temperature, setTemperature] = useState(1.0);
@@ -84,22 +87,35 @@ const App = () => {
   const [showImport, setShowImport] = useState(false);
   const [showCmdPalette, setShowCmdPalette] = useState(false);
   
+  // RAG & 导入配置
   const [importTab, setImportTab] = useState("file"); 
   const [ragMode, setRagMode] = useState("rag");
   const [embedModel, setEmbedModel] = useState("bge-small"); 
   const [statusMsg, setStatusMsg] = useState({ type: "", text: "" });
   const [scrollTarget, setScrollTarget] = useState('bottom');
   
+  // 后端连接状态
+  const [backendConnected, setBackendConnected] = useState(true);
+
+  // Refs
   const fileInputRef = useRef(null);
   const toolFileInputRef = useRef(null);
   const searchInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const lastUserMsgRef = useRef(null);
+  const abortControllerRef = useRef(null); 
+  const msgBufferRef = useRef(""); 
+  const reasoningBufferRef = useRef(""); 
+  const typingTimerRef = useRef(null); 
+  const isStreamingRef = useRef(false); 
 
+  // 导入源输入状态
   const [repoUrl, setRepoUrl] = useState("");
   const [repoBranch, setRepoBranch] = useState("main");
   const [folderPath, setFolderPath] = useState("");
   const [webUrl, setWebUrl] = useState("");
 
-  // === IDE 状态 ===
+  // IDE 状态
   const [fileTree, setFileTree] = useState([]);
   const [activeFile, setActiveFile] = useState(null); 
   const [editorContent, setEditorContent] = useState("");
@@ -115,20 +131,13 @@ const App = () => {
   const [showMdPreview, setShowMdPreview] = useState(false);
   const [tokenUsage, setTokenUsage] = useState({ used: 0, limit: 32000 });
 
-  // === @ 提及相关状态 ===
+  // @ 提及相关状态
   const [showMentionList, setShowMentionList] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionIndex, setMentionIndex] = useState(-1);
-
-  const messagesEndRef = useRef(null);
-  const lastUserMsgRef = useRef(null);
-  const abortControllerRef = useRef(null); 
-  const lastUserIndex = messages.map(m => m.role).lastIndexOf('user');
-  const msgBufferRef = useRef(""); 
-  const reasoningBufferRef = useRef(""); 
-  const typingTimerRef = useRef(null); 
-  const isStreamingRef = useRef(false); 
   const [isListening, setIsListening] = useState(false);
+  
+  const lastUserIndex = messages.map(m => m.role).lastIndexOf('user');
 
   // === Effects ===
   useEffect(() => {
@@ -155,7 +164,6 @@ const App = () => {
               messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); 
           } else if (scrollTarget === 'last-user') {
               setTimeout(() => {
-                  // 修改：block: "start" 让元素滚动到可视区域顶部
                   lastUserMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
               }, 100);
           }
@@ -176,7 +184,13 @@ const App = () => {
 
   useEffect(() => { if(showCmdPalette) searchInputRef.current?.focus(); }, [showCmdPalette]);
 
-  useEffect(() => { fetchHistory(); fetchConfigAndInit(); fetchSources(); fetchFileTree(); }, []);
+  useEffect(() => { 
+    checkBackendHealth(); 
+    fetchConfigAndInit(); 
+    fetchSources(); 
+    fetchFileTree(); 
+  }, []);
+
   useEffect(() => { 
       if (apiKey) localStorage.setItem(`api_key_${provider}`, apiKey);
       localStorage.setItem("ai_provider", provider);
@@ -185,6 +199,19 @@ const App = () => {
   }, [apiKey, provider, baseUrl, model]);
 
   // === Handlers ===
+  
+  const checkBackendHealth = async () => {
+      try {
+          await axios.get(`${API_URL}/health`, { timeout: 2000 });
+          setBackendConnected(true);
+          fetchHistory(); 
+      } catch (e) {
+          console.error("Backend disconnected:", e);
+          setBackendConnected(false);
+          setStatusMsg({ type: "error", text: "后端未连接，请检查 server.py 是否运行" });
+      }
+  };
+
   const handleProviderChange = (e) => {
     const newProvider = e.target.value;
     setProvider(newProvider);
@@ -212,8 +239,8 @@ const App = () => {
 
   const fetchSources = async () => axios.get(`${API_URL}/api/sources`).then(res => setSources(res.data)).catch(console.error);
   
-  // === 优化后的历史记录获取逻辑 ===
   const fetchHistory = async () => {
+      if (!backendConnected) return;
       try {
           const res = await axios.get(`${API_URL}/api/history`);
           if (Array.isArray(res.data)) {
@@ -223,15 +250,12 @@ const App = () => {
           }
       } catch (e) {
           console.error("Fetch history error:", e);
-          setStatusMsg({ type: "error", text: "获取历史记录失败" });
       }
   };
 
-  // === 刷新历史记录按钮处理函数 ===
   const handleRefreshHistory = async () => {
       setIsRefreshingHistory(true);
       await fetchHistory();
-      // 加一点延迟让动画可见，体验更好
       setTimeout(() => setIsRefreshingHistory(false), 500);
       setStatusMsg({ type: "success", text: "历史记录已刷新" });
       setTimeout(() => setStatusMsg({type:"", text:""}), 1500);
@@ -255,7 +279,6 @@ const App = () => {
     try {
         setStatusMsg({ type: "info", text: "正在加载..." });
         const res = await axios.post(`${API_URL}/api/load_history`, { path });
-        // 增加数据校验
         if (res.data && res.data.messages) {
             setMessages(res.data.messages);
             setSessionId(res.data.session_id);
@@ -392,27 +415,60 @@ const App = () => {
       }
   };
 
+  // === 展开代码块，确保可读性 ===
   const handleFileUpload = async (e) => {
-    const file = e.target.files[0]; if (!file) return;
+    const file = e.target.files[0]; 
+    if (!file) return;
     setIsImporting(true);
-    const formData = new FormData(); formData.append("file", file); formData.append("mode", ragMode); formData.append("embed_model", embedModel);
-    try { await axios.post(`${API_URL}/api/upload_file`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }); handleImportSuccess({ type: 'file' }); } 
-    catch (err) { setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); setIsImporting(false); } finally { e.target.value = null; }
+    const formData = new FormData(); 
+    formData.append("file", file); 
+    formData.append("mode", ragMode); 
+    formData.append("embed_model", embedModel);
+    try { 
+        await axios.post(`${API_URL}/api/upload_file`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }); 
+        handleImportSuccess({ type: 'file' }); 
+    } catch (err) { 
+        setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); 
+        setIsImporting(false); 
+    } finally { 
+        e.target.value = null; 
+    }
   };
+
   const handleFolderLoad = async () => {
-    if (!folderPath) return; setIsImporting(true);
-    try { await axios.post(`${API_URL}/api/load_folder`, { folder_path: folderPath }, { params: { mode: ragMode, embed_model: embedModel } }); handleImportSuccess({ type: 'folder' }); }
-    catch (err) { setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); setIsImporting(false); }
+    if (!folderPath) return; 
+    setIsImporting(true);
+    try { 
+        await axios.post(`${API_URL}/api/load_folder`, { folder_path: folderPath }, { params: { mode: ragMode, embed_model: embedModel } }); 
+        handleImportSuccess({ type: 'folder' }); 
+    } catch (err) { 
+        setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); 
+        setIsImporting(false); 
+    }
   };
+
   const handleGitLoad = async () => {
-    if (!repoUrl) return; setIsImporting(true);
-    try { await axios.post(`${API_URL}/api/load_git`, { repo_url: repoUrl, branch: repoBranch }, { params: { mode: ragMode, embed_model: embedModel } }); handleImportSuccess({ type: 'git' }); }
-    catch (err) { setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); setIsImporting(false); }
+    if (!repoUrl) return; 
+    setIsImporting(true);
+    try { 
+        await axios.post(`${API_URL}/api/load_git`, { repo_url: repoUrl, branch: repoBranch }, { params: { mode: ragMode, embed_model: embedModel } }); 
+        handleImportSuccess({ type: 'git' }); 
+    } catch (err) { 
+        setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); 
+        setIsImporting(false); 
+    }
   };
+
   const handleWebLoad = async () => {
-    if (!webUrl) return; setIsImporting(true);
-    try { await axios.post(`${API_URL}/api/load_web`, { url: webUrl }, { params: { mode: ragMode, embed_model: embedModel } }); handleImportSuccess({ type: 'web' }); }
-    catch (err) { setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); setIsImporting(false); }
+    if (!webUrl) return; 
+    setIsImporting(true);
+    try { 
+        await axios.post(`${API_URL}/api/load_web`, { url: webUrl }, { params: { mode: ragMode, embed_model: embedModel } }); 
+        handleImportSuccess({ type: 'web' }); 
+    } catch (err) { 
+        setStatusMsg({ type: "error", text: err.response?.data?.detail || err.message }); 
+        setIsImporting(false); 
+    }
   };
 
   const fetchFileTree = async () => {
@@ -428,7 +484,6 @@ const App = () => {
           const res = await axios.post(`${API_URL}/api/fs/read`, { path });
           setActiveFile({ path, content: res.data.content });
           setEditorContent(res.data.content);
-          // 重置预览状态
           setShowMdPreview(false);
       } catch (e) { setStatusMsg({ type: "error", text: "打开失败: " + e.message }); }
   };
@@ -500,23 +555,21 @@ const App = () => {
   };
 
   const handleChatSend = async () => {
-    // 1. 基础校验：输入为空或正在加载则返回
     if (!input.trim()) return;
     if (isLoading) return;
 
-    // 2. 立即更新 UI：显示用户消息 + AI 占位符（为了显示加载动画）
+    if (!backendConnected) {
+        setStatusMsg({ type: "error", text: "后端服务未启动" });
+        return;
+    }
+
     setScrollTarget('bottom');
     const userMsg = { role: "user", content: input };
-    // 先添加用户消息
     const newMessages = [...messages, userMsg];
-    
-    // 再添加一个空的 assistant 消息作为占位符，确保 UI 立即显示“正在思考”动画
     setMessages([...newMessages, { role: "assistant", content: "", reasoning: "", sources: [] }]);
     
     setInput("");
     setIsLoading(true);
-
-    // 重置流式缓冲区
     msgBufferRef.current = "";
     reasoningBufferRef.current = "";
     isStreamingRef.current = true;
@@ -525,14 +578,11 @@ const App = () => {
     const controller = new AbortController(); 
     abortControllerRef.current = controller;
 
-    // 3. 延迟校验 API Key（"先上车后补票"策略）
     if (!apiKey) {
-        // 延迟 600ms，让用户看到一下加载动画，确认系统已响应
         setTimeout(() => {
             setMessages(prev => {
                 const arr = [...prev];
                 const lastIdx = arr.length - 1;
-                // 直接修改最后的占位符消息为错误提示
                 if (lastIdx >= 0 && arr[lastIdx].role === 'assistant') {
                     arr[lastIdx] = {
                         ...arr[lastIdx],
@@ -549,10 +599,7 @@ const App = () => {
         return;
     }
 
-    // 4. 启动打字机动画定时器
     if (typingTimerRef.current) clearInterval(typingTimerRef.current);
-    
-    // 标记是否接收到内容
     let hasReceivedContent = false;
 
     typingTimerRef.current = setInterval(() => {
@@ -571,7 +618,6 @@ const App = () => {
                 if (last && last.role === "assistant") {
                     return [...prev.slice(0, -1), { ...last, content: last.content + cChunk, reasoning: (last.reasoning || "") + rChunk }];
                 }
-                // 理论上不会走到这里，因为我们已经预置了 assistant 消息
                 return prev;
             });
         } else if (!isStreamingRef.current) {
@@ -579,11 +625,9 @@ const App = () => {
         }
     }, 20);
 
-    // 5. 保存历史记录 (仅保存用户消息部分，AI 回复稍后更新)
     let currentSessionId = sessionId;
     if (!currentSessionId) {
         try { 
-            // 初始保存只包含用户消息，避免保存空的 assistant 消息导致历史记录显示异常
             const res = await axios.post(`${API_URL}/api/save_history`, { session_id: null, messages: newMessages }); 
             currentSessionId = res.data.session_id; 
             setSessionId(currentSessionId); 
@@ -600,7 +644,6 @@ const App = () => {
         pinned_files: pinnedFiles
     } : null;
 
-    // 6. 发起网络请求
     try {
       const response = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
@@ -626,10 +669,17 @@ const App = () => {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let textBuffer = "";
+      
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const lines = decoder.decode(value, { stream: true }).split("\n");
+        
+        const text = decoder.decode(value, { stream: true });
+        textBuffer += text;
+        const lines = textBuffer.split("\n");
+        textBuffer = lines.pop();
+        
         for (let line of lines) {
             if (!line.trim()) continue;
             try {
@@ -650,30 +700,30 @@ const App = () => {
                 } else if (data.t === "error") {
                     msgBufferRef.current += `\n\n**[API 错误]**：${data.d}`;
                     hasReceivedContent = true;
-                    isStreamingRef.current = false;
+                    isStreamingRef.current = false; 
                     clearInterval(typingTimerRef.current);
                 }
-            } catch (e) { }
+            } catch (e) { 
+                // 忽略 JSON 解析错误
+            }
         }
       }
+      
       isStreamingRef.current = false;
       clearInterval(typingTimerRef.current); 
       
-      // 7. 请求结束后的处理 (保存完整对话)
+      // === [关键兜底逻辑] 如果流结束了但没有任何内容，显示错误 ===
       setMessages(prev => {
           const last = prev[prev.length - 1];
-          
-          // 如果完全没有收到内容，说明连接成功但无响应
-          if (!last.content && !last.reasoning && !msgBufferRef.current && !reasoningBufferRef.current) {
-              const errorMsg = "**[错误]**：服务器响应为空。请检查：\n1. API Key 是否正确\n2. 网络连接是否正常\n3. 模型名称是否有效";
+          // 如果内容为空，且缓冲区也没东西
+          if (!last.content && !last.reasoning && !msgBufferRef.current && !reasoningBufferRef.current && !hasReceivedContent) {
+              const errorMsg = "**[无响应]**：后端连接正常，但 AI 没有返回任何内容。请检查：\n1. API Key 是否有效\n2. 模型名称是否正确 (例如 deepseek-chat)\n3. Base URL 是否匹配";
               const updatedMsg = { ...last, content: errorMsg };
               const finalMessages = [...prev.slice(0, -1), updatedMsg];
               axios.post(`${API_URL}/api/save_history`, { session_id: currentSessionId, messages: finalMessages }).catch(console.error);
               return finalMessages;
           }
-
-          // 正常结束，保存
-          const finalMessages = [...newMessages, { role: "assistant", content: prev[prev.length - 1].content, reasoning: prev[prev.length - 1].reasoning, sources: prev[prev.length - 1].sources }];
+          const finalMessages = [...newMessages, { role: "assistant", content: prev[prev.length - 1].content + msgBufferRef.current, reasoning: prev[prev.length - 1].reasoning + reasoningBufferRef.current, sources: prev[prev.length - 1].sources }];
           axios.post(`${API_URL}/api/save_history`, { session_id: currentSessionId, messages: finalMessages }).catch(console.error);
           return finalMessages;
       });
@@ -681,13 +731,10 @@ const App = () => {
     } catch (e) { 
         isStreamingRef.current = false; 
         clearInterval(typingTimerRef.current);
-        // 错误处理：直接在当前气泡中显示错误
         setMessages(prev => {
             const last = prev[prev.length - 1];
             const errorContent = `**[请求中断]**：${e.message}`;
-            // 如果是 AbortError (用户停止生成)，则不视为错误
             if (e.name === 'AbortError') return prev;
-
             return [...prev.slice(0, -1), { ...last, content: last.content + (last.content ? "\n\n" : "") + errorContent }];
         });
     } finally { 
@@ -737,10 +784,15 @@ const App = () => {
             if (!fetchResponse.ok) throw new Error(`HTTP error! status: ${fetchResponse.status}`);
             const reader = fetchResponse.body.getReader();
             const decoder = new TextDecoder();
+            let textBuffer = "";
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                const lines = decoder.decode(value, { stream: true }).split("\n");
+                const text = decoder.decode(value, { stream: true });
+                textBuffer += text;
+                const lines = textBuffer.split("\n");
+                textBuffer = lines.pop();
+
                 for (let line of lines) { 
                     if (!line.trim()) continue;
                     try { 
@@ -828,6 +880,14 @@ const App = () => {
             </button>
         </div>
         
+        {/* Backend Status Indicator */}
+        {!backendConnected && (
+            <div className="bg-red-50 dark:bg-red-900/20 p-2 flex items-center justify-center border-b border-red-100 dark:border-red-900/50 text-xs text-red-500 font-medium">
+                <ExclamationTriangleIcon className="w-4 h-4 mr-1.5"/> 后端断开
+                <button onClick={checkBackendHealth} className="ml-2 underline hover:text-red-600">重试</button>
+            </div>
+        )}
+
         {/* Sidebar Tabs */}
         <div className="flex px-2 py-2 space-x-1 bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-700">
             {['chat', 'editor', 'tools'].map(view => (
@@ -864,7 +924,7 @@ const App = () => {
                     <div className="space-y-1">
                         {!historyList || historyList.length === 0 ? (
                             <div className="text-center py-8 text-xs text-slate-400 italic bg-slate-50 dark:bg-slate-800/50 rounded-lg mx-2 border border-dashed border-slate-200 dark:border-slate-700">
-                                暂无历史记录
+                                {backendConnected ? "暂无历史记录" : "无法连接到历史记录"}
                             </div>
                         ) : (
                             historyList.map(h => (
@@ -1000,15 +1060,19 @@ const App = () => {
                 <button onClick={() => setShowSidebar(!showSidebar)} className="mr-4 text-slate-400 hover:text-slate-600 transition">
                     {showSidebar ? <XMarkIcon className="w-5 h-5"/> : <Bars3Icon className="w-5 h-5"/>}
                 </button>
-                <span className="font-semibold text-sm text-slate-700 dark:text-slate-200">
+                <span className="font-semibold text-sm text-slate-700 dark:text-slate-200 flex items-center">
                     {currentView === 'editor' ? (activeFile ? activeFile.path.split('/').pop() : 'IDE 编辑器') : 
                      currentView === 'tool-runner' ? (activeTool ? activeTool.name : '工具箱') :
                      '智能助手'}
+                     {backendConnected ? 
+                        <SignalIcon className="w-3 h-3 text-green-500 ml-2" title="已连接到后端"/> : 
+                        <span className="flex items-center text-[10px] text-red-500 ml-2 bg-red-50 dark:bg-red-900/20 px-2 py-0.5 rounded-full"><div className="w-1.5 h-1.5 bg-red-500 rounded-full mr-1 animate-pulse"></div>未连接</span>
+                     }
                 </span>
                 {statusMsg.text && <span className={`ml-4 text-xs px-2.5 py-0.5 rounded-full animate-fadeIn font-medium ${statusMsg.type === 'error' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>{statusMsg.text}</span>}
             </div>
             <div className="flex items-center space-x-3">
-                {/* === 新增：IDE 模式下的侧边栏切换按钮 === */}
+                {/* IDE 模式下的侧边栏切换按钮 */}
                 {currentView === 'editor' && (
                     <button 
                         onClick={() => setShowIdeChat(!showIdeChat)} 
@@ -1059,9 +1123,6 @@ const App = () => {
                     terminalOutput={terminalOutput}
                     handleRunTerminal={handleRunTerminal}
                     darkMode={darkMode}
-                    // IDE View Pinned Files (Left side chat) need to be rendered differently here
-                    // Wait, the structure is Editor Left + Chat Right. 
-                    // EnhancedEditor handles the Editor part. I need to render the Chat part in App.jsx
                 />
             )}
 
